@@ -209,6 +209,10 @@ else
     --nameserver "1.1.1.1 8.8.8.8"
   if [[ -n "$SSHKEY" ]]; then
     qm set "$VMID" --sshkey "$SSHKEY"
+    # Fail-Fast: Key muss im Config landen, sonst wird die VM unerreichbar.
+    qm config "$VMID" | grep -qi "sshkeys" \
+      || { msg_error "SSH-Key wurde nicht in qm config uebernommen – Abbruch vor Disk-Import."; exit 1; }
+    msg_ok "SSH-Key in Cloud-Init-Seed uebernommen."
   fi
   if [[ -n "$GPU_PCI" ]]; then
     msg_info "Aktiviere GPU-Passthrough $GPU_PCI ..."
@@ -232,6 +236,8 @@ if [[ -n "$GPU_PCI" ]]; then
 fi
 # SSH-Key auch im Update-Modus setzen (harmlos, hilft bei Cloud-Init-Re-Run)
 qm set "$VMID" --sshkey "$SSHKEY" 2>/dev/null || msg_warn "sshkey setzen fehlgeschlagen – weiter."
+qm config "$VMID" | grep -qi "sshkeys" && msg_ok "SSH-Key in qm config vorhanden." \
+  || msg_warn "Kein sshkeys in qm config – SSH wird evtl. fehlschlagen."
 qm start "$VMID" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
