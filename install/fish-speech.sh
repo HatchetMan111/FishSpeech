@@ -127,6 +127,23 @@ done
 MODE="cpu"
 [[ -n "$GPU_PCI" ]] && MODE="cuda"
 
+# --ip normalisieren: Proxmox braucht CIDR (mit Maske) bei Erstellung.
+# Reine IP -> /24 anhaengen. Evtl. ip=-Praefix tolerieren.
+IPCFG="${IPCFG#ip=}"
+if [[ "$IPCFG" != "dhcp" && "$IPCFG" != */* ]]; then
+  if [[ "$IPCFG" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    IPCFG="${IPCFG}/24"
+    msg_warn "--ip ohne Netzmaske – nutze $IPCFG (Default /24)."
+  else
+    msg_error "--ip ungültig: '$IPCFG' (erwartet: dhcp, 192.168.178.50 oder 192.168.178.50/24)."
+    exit 1
+  fi
+fi
+# Explizit gesetzte VMID (Flag oder ENV) -> existierende VM = Update-Modus.
+# Nur bei Auto-ID (nichts uebergeben) wird bei Kollision ausgewichen.
+VMID_EXPLICIT=0
+[[ -n "$VMID_ARG" ]] && VMID_EXPLICIT=1
+
 # ---------------------------------------------------------------------------
 # 1. Host-Pruefung
 # ---------------------------------------------------------------------------
@@ -135,15 +152,19 @@ command -v qm >/dev/null || { msg_error "qm nicht gefunden – kein Proxmox-Host
 command -v pvesh >/dev/null || { msg_error "pvesh nicht gefunden."; exit 1; }
 command -v pvesm >/dev/null || { msg_error "pvesm nicht gefunden."; exit 1; }
 
-# Immer naechste freie ID, ausser --vmid gesetzt (Kollision -> ausweichen)
+# Naechste freie ID bei Auto (nichts uebergeben). Explizite --vmid + existent = Update.
 if [[ -z "$VMID" ]]; then
   VMID="$(pvesh get /cluster/nextid)"
   msg_info "Naechste freie VM-ID: $VMID"
 else
   if qm status "$VMID" >/dev/null 2>&1; then
-    FREE_ID="$(pvesh get /cluster/nextid)"
-    msg_warn "VMID $VMID belegt – weiche auf freie ID $FREE_ID aus."
-    VMID="$FREE_ID"
+    if [[ "$VMID_EXPLICIT" == "1" ]]; then
+      msg_info "VM $VMID existiert – Update-Modus (idempotent)."
+    else
+      FREE_ID="$(pvesh get /cluster/nextid)"
+      msg_warn "VMID $VMID belegt – weiche auf freie ID $FREE_ID aus."
+      VMID="$FREE_ID"
+    fi
   fi
 fi
 
