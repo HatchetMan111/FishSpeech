@@ -107,6 +107,8 @@ qm status 108
 ```
 2. Häufigste Ursachen: Cloud-Init Erstboot dauert (Thin-Pool-Warnung = langsamer Storage),
    DHCP auf `vmbr0` antwortet nicht, oder `qemu-guest-agent` im Gast läuft noch nicht.
+   Das Script versucht Agent + ARP/DHCP-Fallback (per Gast-MAC) – bleibt beides leer,
+   hat der Gast schlicht kein Netz.
 3. Konsole öffnen und im Gast prüfen:
 ```bash
 qm terminal 108
@@ -114,7 +116,12 @@ qm terminal 108
 systemctl status qemu-guest-agent --no-pager
 ip -4 addr show
 ```
-4. Danach Update-Modus erneut laufen lassen (idempotent, VM bleibt bestehen):
+4. Schnellweg ohne Warten: bekannte/statische IP direkt übergeben –
+   überspringt den Agent-Wait komplett:
+```bash
+bash fish-speech.sh --vmid 108 --ip 192.168.1.50
+```
+5. Danach Update-Modus erneut laufen lassen (idempotent, VM bleibt bestehen):
 ```bash
 bash fish-speech.sh --vmid 108
 ```

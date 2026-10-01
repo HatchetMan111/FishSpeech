@@ -92,6 +92,7 @@ Optionen:
   --sshkey PATH        SSH Public Key fuer Cloud-Init-User (empfohlen, sonst Passwort+sshpass)
   --ciuser NAME        Cloud-Init-User (Default: ${DEFAULT_CIUSER})
   --ip CIDR            statische IP, z.B. 192.168.1.50/24 (Default: dhcp)
+  --ip PLAIN-IP        z.B. --ip 192.168.1.50: ueberspringt Agent-Wait, nutzt IP direkt
   --gateway IP         Gateway bei statischer IP
   --debug              bash -x + maximale Fehlermeldungskette
   -h, --help           diese Hilfe
@@ -227,17 +228,31 @@ fi
 qm start "$VMID" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 4. Gast-IP + SSH warten (robust: Agent-Ping + 3 Methoden + Diagnose-Dump)
+# 4. Gast-IP + SSH warten (v3 agent-unabhaengig: Ping + Agent + ARP/DHCP)
 # ---------------------------------------------------------------------------
-# Root-Cause VM 108: Debian-Cloud Erstboot (growpart + cloud-init + Agent-Start)
-# braucht auf langsamem Thin-Pool laenger als 5 Min; nur eine Abfragemethode
-# ohne Agent-Ping und ohne Diagnose-Dump gab keine Chance auf Update-Modus.
-msg_info "Warte auf QEMU-Guest-Agent (max. 10 Min, Erstboot dauert) ..."
+# Root-Cause VM 108 (2. Befund): Agent 9+ Min "wartend" bei laufender VM.
+# Hypothese: Gast bootet, aber Agent meldet keine Interfaces (kein DHCP auf
+# vmbr0, cloud-init wartet, oder Agent-Dienst noch nicht aktiv). Reines
+# Agent-Polling kann dann nie erfolgreich sein -> ARP/DHCP-Fallback + --ip.
+msg_info "Warte auf Gast-IP (max. 10 Min, Agent + ARP/DHCP-Fallback) ..."
 VM_IP=""
+# Manueller Override: --ip als reine IP (ohne /) ueberspringt den Wait.
+if [[ "$IPCFG" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  VM_IP="$IPCFG"
+  msg_warn "Manuelle IP per --ip: $VM_IP (Agent-Wait uebersprungen)."
+fi
 AGENT_OK=0
+# MAC einmalig aus qm config fuer ARP/DHCP-Fallback (z.B. net0: virtio=BC:...).
+GUEST_MAC="$(qm config "$VMID" 2>/dev/null | grep -oP 'net0:.*?addr(e?ss)?=\K[0-9A-Fa-f:]{17}|net0:.*?\b\K[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}' | head -n1 || true)"
+[[ -n "${GUEST_MAC:-}" ]] && msg_info "Gast-MAC: $GUEST_MAC"
+if [[ -z "${VM_IP:-}" ]]; then
 for i in $(seq 1 60); do
   sleep 10
-  # Methode 0: Agent lebt? (stille Pruefung, kein Abbruch)
+  # Status-Waechter: VM versehentlich gestoppt? -> starten.
+  if ! qm status "$VMID" 2>/dev/null | grep -q "status: running"; then
+    msg_warn "VM nicht running (Versuch $i) – starte ..."; qm start "$VMID" 2>/dev/null || true
+  fi
+  # Methode 0: Agent lebt?
   if qm agent "$VMID" ping >/dev/null 2>&1; then
     [[ "$AGENT_OK" == "0" ]] && msg_ok "Guest-Agent antwortet (Versuch $i/60)."
     AGENT_OK=1
@@ -248,21 +263,39 @@ for i in $(seq 1 60); do
   if [[ -z "${VM_IP:-}" ]]; then
     VM_IP="$(qm agent "$VMID" network-get-interfaces 2>/dev/null | grep -oP '"ip-address"\s*:\s*"\K(?!127\.|::1|fe80)[0-9a-fA-F:.]+' | grep -v '^fe80' | head -n1 || true)"
   fi
-  # Methode 3: qm guest exec hostname -I (braucht Agent, aber anderes JSON-Format)
+  # Methode 3: qm guest exec hostname -I (braucht Agent, anderes Format)
   if [[ -z "${VM_IP:-}" && "$AGENT_OK" == "1" ]]; then
     VM_IP="$(qm guest exec "$VMID" -- hostname -I 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
   fi
-  if [[ -n "${VM_IP:-}" ]]; then break; fi
-  [[ $((i % 6)) == 0 ]] && msg_info "noch keine IP nach $((i * 10))s (Agent: $([[ "$AGENT_OK" == "1" ]] && echo ok || echo wartend)) ..."
+  # Methode 4: ARP-Tabelle per MAC (agent-unabhaengig, braucht nur DHCP+Netz)
+  if [[ -z "${VM_IP:-}" && -n "${GUEST_MAC:-}" ]]; then
+    VM_IP="$(ip neigh show dev "$BRIDGE" 2>/dev/null | grep -i "$GUEST_MAC" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  fi
+  # Methode 5: DHCP-Leases per MAC (dnsmasq/dhcpd, agent-unabhaengig)
+  if [[ -z "${VM_IP:-}" && -n "${GUEST_MAC:-}" ]]; then
+    VM_IP="$(grep -ih "$GUEST_MAC" /var/lib/misc/dnsmasq.leases /var/lib/dhcp/dhcpd.leases 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  fi
+  if [[ -n "${VM_IP:-}" ]]; then
+    msg_ok "Gast-IP via Fallback gefunden: $VM_IP"
+    break
+  fi
+  [[ $((i % 6)) == 0 ]] && msg_info "noch keine IP nach $((i * 10))s (Agent: $([[ "$AGENT_OK" == "1" ]] && echo ok || echo wartend), ARP/DHCP: leer) ..."
 done
+fi
 if [[ -z "${VM_IP:-}" ]]; then
   msg_error "Keine Gast-IP nach 10 Min. Diagnose-Dump:"
   msg_error "--- qm status ---"; qm status "$VMID" || true
   msg_error "--- qm agent ping ---"; qm agent "$VMID" ping || true
   msg_error "--- network-get-interfaces (roh) ---"; qm guest cmd "$VMID" network-get-interfaces || true
   msg_error "--- qm config ---"; qm config "$VMID" || true
-  msg_error "Naechste Schritte: qm terminal $VMID -> systemctl status qemu-guest-agent; ip -4 addr; DHCP auf vmbr0 pruefen."
-  msg_error "Danach Update-Modus: bash fish-speech.sh --vmid $VMID (VM bleibt bestehen, idempotent)."
+  msg_error "--- cloud-init user (erste 30 Zeilen) ---"; qm cloudinit dump "$VMID" user 2>/dev/null | head -n 30 || true
+  msg_error "--- ARP auf $BRIDGE ---"; ip neigh show dev "$BRIDGE" 2>/dev/null || true
+  msg_error "--- DHCP-Leases (Tail) ---"; tail -n 5 /var/lib/misc/dnsmasq.leases /var/lib/dhcp/dhcpd.leases 2>/dev/null || true
+  msg_error "Naechste Schritte:"
+  msg_error " 1) qm terminal $VMID -> login fish -> ip -4 addr; systemctl status qemu-guest-agent"
+  msg_error " 2) Bleibt ip leer: DHCP auf $BRIDGE fehlt -> statische IP setzen und Update-Modus:"
+  msg_error "    bash fish-speech.sh --vmid $VMID --ip <GEFUNDENE-ODER-GEWUENSCHTE-IP>"
+  msg_error " 3) Update-Modus: bash fish-speech.sh --vmid $VMID (VM bleibt bestehen, idempotent)."
   exit 1
 fi
 msg_ok "Gast-IP: $VM_IP"
