@@ -91,8 +91,8 @@ Optionen:
   --gpu PCI            NVIDIA-Passthrough, z.B. 0000:01:00 (Default: kein Passthrough = CPU-Modus)
   --sshkey PATH        SSH Public Key fuer Cloud-Init-User (empfohlen, sonst Passwort+sshpass)
   --ciuser NAME        Cloud-Init-User (Default: ${DEFAULT_CIUSER})
-  --ip CIDR            statische IP, z.B. 192.168.1.50/24 (Default: dhcp)
-  --ip PLAIN-IP        z.B. --ip 192.168.1.50: ueberspringt Agent-Wait, nutzt IP direkt
+  --ip CIDR/IP          z.B. --ip 192.168.178.50/24 (+ --gateway): statisch per Cloud-Init,
+                     als reine IP auch Update-Override (ueberspringt Agent-Wait)
   --gateway IP         Gateway bei statischer IP
   --debug              bash -x + maximale Fehlermeldungskette
   -h, --help           diese Hilfe
@@ -236,10 +236,13 @@ qm start "$VMID" 2>/dev/null || true
 # Agent-Polling kann dann nie erfolgreich sein -> ARP/DHCP-Fallback + --ip.
 msg_info "Warte auf Gast-IP (max. 10 Min, Agent + ARP/DHCP-Fallback) ..."
 VM_IP=""
-# Manueller Override: --ip als reine IP (ohne /) ueberspringt den Wait.
-if [[ "$IPCFG" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  VM_IP="$IPCFG"
-  msg_warn "Manuelle IP per --ip: $VM_IP (Agent-Wait uebersprungen)."
+# Statische IP (plain oder CIDR) ueberspringt den Agent-Wait: Cloud-Init setzt
+# sie beim Boot, wir warten direkt auf Ping/SSH. Deckt Neuinstallation mit
+# --ip 192.168.178.50/24 --gateway ... UND Update mit --ip 192.168.178.50 ab.
+STATIC_IP="$(printf '%s' "$IPCFG" | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)"
+if [[ -n "${STATIC_IP:-}" ]]; then
+  VM_IP="$STATIC_IP"
+  msg_warn "Statische IP per --ip: $VM_IP (Agent-Wait uebersprungen, warte auf Ping/SSH nach Boot)."
 fi
 AGENT_OK=0
 # MAC einmalig aus qm config fuer ARP/DHCP-Fallback (z.B. net0: virtio=BC:...).

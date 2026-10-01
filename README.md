@@ -16,6 +16,8 @@ Anpassungen per Umgebungsvariable oder Flag (ID immer **nächste freie**, außer
 ```bash
 VMID=150 CORES=8 RAM=16384 DISK=60 bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh)"
 bash fish-speech.sh --vmid 150 --cores 4 --memory 16384 --disk 60 --bridge vmbr0 --storage local-lvm
+# Neuinstallation mit statischer IP (empfohlen wenn DHCP klemmt, z.B. FritzBox-Netz):
+bash fish-speech.sh --ip 192.168.178.50/24 --gateway 192.168.178.1
 bash fish-speech.sh --gpu 0000:01:00 --sshkey ~/.ssh/id_rsa.pub   # NVIDIA-Passthrough (sonst CPU-Modus)
 bash fish-speech.sh --debug   # = bash -x, komplette Fehlermeldungskette + Log unter /tmp/fish-speech-install-*.log
 ```
