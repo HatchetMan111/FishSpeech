@@ -384,7 +384,9 @@ for _ in $(seq 1 30); do
   sleep 10
 done
 sudo apt-get update
-sudo apt-get -o DPkg::Lock::Timeout=300 install -y git curl ca-certificates python3.12 python3.12-venv portaudio19-dev libsox-dev ffmpeg
+# Kein python3.12 hier: Debian 12 hat nur 3.11. uv laedt den 3.12-Interpreter
+# selbst (uv sync --python 3.12), apt liefert nur Systemlibs.
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y git curl ca-certificates portaudio19-dev libsox-dev ffmpeg
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
