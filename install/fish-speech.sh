@@ -227,21 +227,44 @@ fi
 qm start "$VMID" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 4. Gast-IP + SSH warten
+# 4. Gast-IP + SSH warten (robust: Agent-Ping + 3 Methoden + Diagnose-Dump)
 # ---------------------------------------------------------------------------
-msg_info "Warte auf QEMU-Guest-Agent / SSH (max. 5 Min) ..."
+# Root-Cause VM 108: Debian-Cloud Erstboot (growpart + cloud-init + Agent-Start)
+# braucht auf langsamem Thin-Pool laenger als 5 Min; nur eine Abfragemethode
+# ohne Agent-Ping und ohne Diagnose-Dump gab keine Chance auf Update-Modus.
+msg_info "Warte auf QEMU-Guest-Agent (max. 10 Min, Erstboot dauert) ..."
 VM_IP=""
-for _ in $(seq 1 60); do
-  sleep 5
-  # Versuch 1: guest-agent
-  VM_IP="$(qm guest cmd "$VMID" network-get-interfaces 2>/dev/null | grep -oP '"ip-address"\s*:\s*"\K(?!127\.|::1|fe80)[0-9a-fA-F:.]+' | head -n1 || true)"
+AGENT_OK=0
+for i in $(seq 1 60); do
+  sleep 10
+  # Methode 0: Agent lebt? (stille Pruefung, kein Abbruch)
+  if qm agent "$VMID" ping >/dev/null 2>&1; then
+    [[ "$AGENT_OK" == "0" ]] && msg_ok "Guest-Agent antwortet (Versuch $i/60)."
+    AGENT_OK=1
+  fi
+  # Methode 1: qm guest cmd (bevorzugt, JSON)
+  VM_IP="$(qm guest cmd "$VMID" network-get-interfaces 2>/dev/null | grep -oP '"ip-address"\s*:\s*"\K(?!127\.|::1|fe80)[0-9a-fA-F:.]+' | grep -v '^fe80' | head -n1 || true)"
+  # Methode 2: qm agent (aeltere Syntax, gleicher Daemon)
   if [[ -z "${VM_IP:-}" ]]; then
-    # Versuch 2: qm guest exec hostname -I
+    VM_IP="$(qm agent "$VMID" network-get-interfaces 2>/dev/null | grep -oP '"ip-address"\s*:\s*"\K(?!127\.|::1|fe80)[0-9a-fA-F:.]+' | grep -v '^fe80' | head -n1 || true)"
+  fi
+  # Methode 3: qm guest exec hostname -I (braucht Agent, aber anderes JSON-Format)
+  if [[ -z "${VM_IP:-}" && "$AGENT_OK" == "1" ]]; then
     VM_IP="$(qm guest exec "$VMID" -- hostname -I 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
   fi
-  [[ -n "${VM_IP:-}" ]] && break
+  if [[ -n "${VM_IP:-}" ]]; then break; fi
+  [[ $((i % 6)) == 0 ]] && msg_info "noch keine IP nach $((i * 10))s (Agent: $([[ "$AGENT_OK" == "1" ]] && echo ok || echo wartend)) ..."
 done
-[[ -n "${VM_IP:-}" ]] || { msg_error "Keine Gast-IP (Guest-Agent). qm guest cmd $VMID ping pruefen."; qm config "$VMID" || true; exit 1; }
+if [[ -z "${VM_IP:-}" ]]; then
+  msg_error "Keine Gast-IP nach 10 Min. Diagnose-Dump:"
+  msg_error "--- qm status ---"; qm status "$VMID" || true
+  msg_error "--- qm agent ping ---"; qm agent "$VMID" ping || true
+  msg_error "--- network-get-interfaces (roh) ---"; qm guest cmd "$VMID" network-get-interfaces || true
+  msg_error "--- qm config ---"; qm config "$VMID" || true
+  msg_error "Naechste Schritte: qm terminal $VMID -> systemctl status qemu-guest-agent; ip -4 addr; DHCP auf vmbr0 pruefen."
+  msg_error "Danach Update-Modus: bash fish-speech.sh --vmid $VMID (VM bleibt bestehen, idempotent)."
+  exit 1
+fi
 msg_ok "Gast-IP: $VM_IP"
 
 SSH_BASE=(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10)

@@ -7,8 +7,6 @@
 
 ## Einzeiler (auf dem Proxmox-Host als root)
 
-> `USER` unten durch deinen GitHub-User ersetzen, sobald das Repo `fish-speech-proxmox` angelegt ist.
-
 ```bash
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh)"
 ```
@@ -96,6 +94,30 @@ GPU nachträglich: `bash fish-speech.sh --vmid 100 --gpu 0000:01:00` (stellt auf
 - Jeder Fehler gibt Befehl + Zeile + Exit-Code + Aufrufstapel aus, Voll-Log unter `/tmp/fish-speech-install-*.log`.
 - `bash fish-speech.sh --debug` für `bash -x`-Trace.
 - Im Gast: `systemctl status fish-speech --no-pager`, `journalctl -u fish-speech -n 100`.
+
+## Troubleshooting: Keine Gast-IP (Guest-Agent)
+
+Symptom: `Keine Gast-IP (Guest-Agent)` nach 10 Min, `qm config` zeigt `agent: enabled=1`.
+
+1. Agent-Status prüfen:
+```bash
+qm agent 108 ping
+qm guest cmd 108 network-get-interfaces
+qm status 108
+```
+2. Häufigste Ursachen: Cloud-Init Erstboot dauert (Thin-Pool-Warnung = langsamer Storage),
+   DHCP auf `vmbr0` antwortet nicht, oder `qemu-guest-agent` im Gast läuft noch nicht.
+3. Konsole öffnen und im Gast prüfen:
+```bash
+qm terminal 108
+# im Gast:
+systemctl status qemu-guest-agent --no-pager
+ip -4 addr show
+```
+4. Danach Update-Modus erneut laufen lassen (idempotent, VM bleibt bestehen):
+```bash
+bash fish-speech.sh --vmid 108
+```
 
 ## Dateien
 
