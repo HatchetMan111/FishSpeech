@@ -89,7 +89,7 @@ Optionen:
   --storage NAME       Disk-Storage (Default: auto, bevorzugt local-lvm)
   --bridge NAME        Netzwerk-Bridge (Default: ${DEFAULT_BRIDGE})
   --gpu PCI            NVIDIA-Passthrough, z.B. 0000:01:00 (Default: kein Passthrough = CPU-Modus)
-  --sshkey PATH        SSH Public Key fuer Cloud-Init-User (empfohlen, sonst Passwort+sshpass)
+  --sshkey PATH        SSH Public Key (PFLICHT, nur Key-Login moeglich)
   --ciuser NAME        Cloud-Init-User (Default: ${DEFAULT_CIUSER})
   --ip CIDR/IP          z.B. --ip 192.168.178.50/24 (+ --gateway): statisch per Cloud-Init,
                      als reine IP auch Update-Override (ueberspringt Agent-Wait)
@@ -160,9 +160,14 @@ msg_info "Storage: $STORAGE_ARG | Bridge: $BRIDGE | Modus: $MODE | VM-Name: $APP
 [[ "$CORES" -ge 4 ]] || msg_warn "Unter 4 vCPU wird Torch sehr langsam (gewaehlt: $CORES)."
 [[ "$DISK" -ge 40 ]] || msg_warn "Unter 40 GB wird es mit Modell + Torch eng (gewaehlt: $DISK)."
 
-if [[ -n "$SSHKEY" ]]; then
-  [[ -f "$SSHKEY" ]] || { msg_error "SSH-Key nicht gefunden: $SSHKEY"; exit 1; }
+if [[ -z "${SSHKEY:-}" ]]; then
+  msg_error "--sshkey fehlt und ist Pflicht: Debian-Cloud-Images lassen nur Key-Login zu"
+  msg_error "(Passwort-SSH ist im Gast deaktiviert -> 'Permission denied (publickey)' ist sicher)."
+  msg_error "Key erzeugen (einmalig): ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''"
+  msg_error "Dann: bash fish-speech.sh --sshkey ~/.ssh/id_ed25519.pub --ip 192.168.178.50/24 --gateway 192.168.178.1 [...]"
+  exit 1
 fi
+[[ -f "$SSHKEY" ]] || { msg_error "SSH-Key nicht gefunden: $SSHKEY"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # 2. Cloud-Image sicherstellen
@@ -225,6 +230,8 @@ fi
 if [[ -n "$GPU_PCI" ]]; then
   qm config "$VMID" | grep -q "hostpci0" || qm set "$VMID" --hostpci0 "${GPU_PCI},pcie=1" || true
 fi
+# SSH-Key auch im Update-Modus setzen (harmlos, hilft bei Cloud-Init-Re-Run)
+qm set "$VMID" --sshkey "$SSHKEY" 2>/dev/null || msg_warn "sshkey setzen fehlgeschlagen – weiter."
 qm start "$VMID" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
