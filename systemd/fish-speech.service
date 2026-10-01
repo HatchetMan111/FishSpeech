@@ -1,0 +1,23 @@
+[Unit]
+Description=Fish-Speech S2-Pro WebUI (Gradio :7860)
+Documentation=https://github.com/fishaudio/fish-speech
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fish
+Group=fish
+WorkingDirectory=/opt/fish-speech
+Environment=PYTHONUNBUFFERED=1
+Environment=GRADIO_SERVER_NAME=0.0.0.0
+Environment=GRADIO_SERVER_PORT=7860
+# CPU-Default. Bei GPU-VM manuell auf cuda umstellen:
+#   sudo systemctl edit fish-speech  ->  Environment=DEVICE_ARG=cuda + ExecStart mit --device cuda
+#   oder Unit neu aus Repo ziehen (GPU-Variante, siehe README).
+ExecStart=/opt/fish-speech/.venv/bin/python tools/run_webui.py --device cpu
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
