@@ -316,7 +316,9 @@ if [[ -z "${VM_IP:-}" ]]; then
 fi
 msg_ok "Gast-IP: $VM_IP"
 
-SSH_BASE=(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10)
+SSH_BASE=(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
+# UserKnownHostsFile=/dev/null: .50 wird bei Neuinstallationen wiederverwendet,
+# sonst blockt der geaenderte Host-Key (REMOTE HOST IDENTIFICATION HAS CHANGED).
 SSH_TARGET="${CIUSER}@${VM_IP}"
 if [[ -n "$SSHKEY" ]]; then
   SSH_KEY_PRIV="${SSHKEY%.pub}"
@@ -354,8 +356,14 @@ set -euo pipefail
 UV_EXTRA="$1"
 DEVICE_FLAG="$2"
 export DEBIAN_FRONTEND=noninteractive
+# Cloud-Init package_upgrade haelt apt in den ersten Minuten belegt -> warten.
+for _ in $(seq 1 30); do
+  sudo fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break
+  echo "warte auf apt-lock (cloud-init package_upgrade laeuft) ..."
+  sleep 10
+done
 sudo apt-get update
-sudo apt-get install -y git curl ca-certificates python3.12 python3.12-venv portaudio19-dev libsox-dev ffmpeg
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y git curl ca-certificates python3.12 python3.12-venv portaudio19-dev libsox-dev ffmpeg
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
