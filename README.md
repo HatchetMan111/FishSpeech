@@ -85,7 +85,7 @@ Modell manuell nachladen (falls best-effort-Download im Gast fehlschlug):
 ```bash
 ssh fish@<VM-IP>
 cd /opt/fish-speech
-.venv/bin/python -m huggingface_hub.cli download fishaudio/s2-pro --local-dir checkpoints/s2-pro
+.venv/bin/hf download fishaudio/s2-pro --local-dir checkpoints/s2-pro
 sudo systemctl restart fish-speech
 ```
 

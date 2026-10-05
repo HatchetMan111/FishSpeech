@@ -79,7 +79,7 @@ ${APP} Proxmox VM Installer (VM-first, CPU-Default + optionaler NVIDIA-Passthrou
 Usage:
   bash fish-speech.sh [OPTIONEN]
   VMID=150 bash fish-speech.sh
-  bash -c "\$(wget -qLO - ${INSTALLER_REPO}/../../raw/main/install/fish-speech.sh)"
+  bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh)"
 
 Optionen:
   --vmid ID            VM-ID (Default: naechste freie ID via 'pvesh get /cluster/nextid')
@@ -169,8 +169,10 @@ else
 fi
 
 # Storage: Argument > local-lvm (wenn vorhanden) > erstes verfuegbares
+# (pvesm status --storage ist ein reiner Filter und liefert auch bei
+# nicht-existierendem Storage Exit 0 -> Erkennung ueber Ausgabe)
 if [[ -z "$STORAGE_ARG" ]]; then
-  if pvesm status --storage local-lvm >/dev/null 2>&1; then STORAGE_ARG="local-lvm";
+  if pvesm status 2>/dev/null | grep -q '^local-lvm[[:space:]]'; then STORAGE_ARG="local-lvm";
   else STORAGE_ARG="$(pvesm status -content images 2>/dev/null | awk 'NR>1 {print $1; exit}')";
   fi
 fi
@@ -197,8 +199,14 @@ mkdir -p "$IMAGE_DIR"
 IMAGE_FILE="$IMAGE_DIR/debian-${DEBIAN_VERSION}-generic-amd64-${APP}.qcow2"
 if [[ ! -s "$IMAGE_FILE" ]]; then
   msg_info "Lade Debian $DEBIAN_VERSION Cloud-Image ..."
-  if command -v wget >/dev/null; then wget -O "$IMAGE_FILE" "$IMAGE_URL";
-  else curl -fsSL -o "$IMAGE_FILE" "$IMAGE_URL"; fi
+  # Atomar: erst .part, erst bei Erfolg umbenennen (kein halbes Image als
+  # "vorhanden" erkennen, falls der Download abbricht).
+  if command -v wget >/dev/null; then
+    wget -O "${IMAGE_FILE}.part" "$IMAGE_URL"
+  else
+    curl -fsSL -o "${IMAGE_FILE}.part" "$IMAGE_URL"
+  fi
+  mv -f "${IMAGE_FILE}.part" "$IMAGE_FILE"
 else
   msg_ok "Cloud-Image vorhanden: $IMAGE_FILE"
 fi
@@ -210,7 +218,8 @@ CIPASS=""
 if qm status "$VMID" >/dev/null 2>&1; then
   msg_warn "VM $VMID existiert – ueberspringe Erstellung (Update-Modus)."
 else
-  CIPASS="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
+  CIPASS="$(openssl rand -hex 12)"   # 24 Hex-Zeichen, kein head/SIGPIPE-Risiko
+  CIPASS="${CIPASS:0:20}"
   IPCONFIG="ip=dhcp"
   [[ "$IPCFG" != "dhcp" ]] && IPCONFIG="ip=$IPCFG"
   [[ -n "$GATEWAY" ]] && IPCONFIG="$IPCONFIG,gw=$GATEWAY"
@@ -337,7 +346,7 @@ if [[ -z "${VM_IP:-}" ]]; then
 fi
 msg_ok "Gast-IP: $VM_IP"
 
-SSH_BASE=(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
+SSH_BASE=(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=error -o ConnectTimeout=10)
 # UserKnownHostsFile=/dev/null: .50 wird bei Neuinstallationen wiederverwendet,
 # sonst blockt der geaenderte Host-Key (REMOTE HOST IDENTIFICATION HAS CHANGED).
 SSH_TARGET="${CIUSER}@${VM_IP}"
@@ -404,8 +413,16 @@ test -f /opt/fish-speech/tools/run_webui.py
 cd /opt/fish-speech
 uv sync --python 3.12 --extra "$UV_EXTRA" || uv sync --python 3.12 --extra cpu
 # Modell best-effort laden (Fehler = nur Warnung, Service startet trotzdem)
-if [ ! -f /opt/fish-speech/checkpoints/s2-pro/model.safetensors ]; then
-  .venv/bin/python -m huggingface_hub.cli download fishaudio/s2-pro --local-dir /opt/fish-speech/checkpoints/s2-pro || echo "WARN: Modell-Download fehlgeschlagen – manuell nachholen, siehe README."
+# fishaudio/s2-pro ist sharded (model-0000{1,2}-of-00002.safetensors +
+# model.safetensors.index.json) – ein einzelnes model.safetensors existiert
+# NICHT, daher index.json + codec.pth als Vollständigkeits-Marker pruefen.
+if [ ! -f /opt/fish-speech/checkpoints/s2-pro/model.safetensors.index.json ] || [ ! -f /opt/fish-speech/checkpoints/s2-pro/codec.pth ]; then
+  # huggingface_hub>=2.0 liefert nur die 'hf' CLI (kein 'huggingface-cli',
+  # 'python -m huggingface_hub.cli' gibt es nicht – Paket hat kein __main__).
+  HF_CLI=".venv/bin/hf"
+  [ -x "$HF_CLI" ] || HF_CLI=".venv/bin/huggingface-cli"
+  "$HF_CLI" download fishaudio/s2-pro --local-dir /opt/fish-speech/checkpoints/s2-pro \
+    || echo "WARN: Modell-Download fehlgeschlagen – manuell nachholen, siehe README."
 fi
 GUEST_EOF
 
@@ -468,6 +485,7 @@ echo ""
 echo "════════════════ INSTALLATION ERFOLGREICH ════════════════"
 echo "  App          : Fish-Speech S2-Pro – SOTA Open-Source TTS"
 echo "  Upstream     : $UPSTREAM_REPO"
+echo "  Installer    : $INSTALLER_REPO"
 echo "  VM           : $VMID (Name: $APP, onboot=1, Modus: $MODE)"
 echo "  Ressourcen   : $CORES vCPU / $RAM MB RAM / $DISK GB Disk"
 echo "  Web UI       : http://${VM_IP}:${APP_PORT}"
