@@ -183,6 +183,15 @@ msg_info "Storage: $STORAGE_ARG | Bridge: $BRIDGE | Modus: $MODE | VM-Name: $APP
 [[ "$CORES" -ge 4 ]] || msg_warn "Unter 4 vCPU wird Torch sehr langsam (gewaehlt: $CORES)."
 [[ "$DISK" -ge 40 ]] || msg_warn "Unter 40 GB wird es mit Modell + Torch eng (gewaehlt: $DISK)."
 
+# Pre-Flight: freies Host-RAM vs. Wunsch-RAM (verhindert "Cannot allocate memory").
+HOST_FREE_MB="$(free -m 2>/dev/null | awk '/^Mem:/{print $7}' || echo 0)"
+if [[ "$HOST_FREE_MB" -gt 0 && "$RAM" -gt "$HOST_FREE_MB" ]]; then
+  msg_error "Host hat nur ${HOST_FREE_MB} MB frei, VM will ${RAM} MB -> qm start wuerde scheitern."
+  msg_error "Mit weniger RAM erneut starten, z.B.: --memory 8192 (Minimum) oder --memory $HOST_FREE_MB"
+  msg_error "Host-Uebersicht: free -m; qm list"
+  exit 1
+fi
+
 if [[ -z "${SSHKEY:-}" ]]; then
   msg_error "--sshkey fehlt und ist Pflicht: Debian-Cloud-Images lassen nur Key-Login zu"
   msg_error "(Passwort-SSH ist im Gast deaktiviert -> 'Permission denied (publickey)' ist sicher)."
@@ -257,7 +266,11 @@ else
   # Disk vergroessern (schlaegt fehl wenn gleich gross – dann nur warnen)
   qm resize "$VMID" scsi0 "${DISK}G" || msg_warn "resize uebersprungen (evtl. bereits $DISK G)."
   msg_ok "VM $VMID erstellt (onboot=1, agent=1)."
-  qm start "$VMID" || true
+  qm start "$VMID" \
+    || { msg_error "qm start scheiterte (oft RAM/Storage voll). free -m und pvesm status pruefen."; exit 1; }
+  qm status "$VMID" | grep -q "status: running" \
+    || { msg_error "VM $VMID laeuft nicht nach qm start. qm status $VMID + journalctl -u pvedaemon -n 50 pruefen."; exit 1; }
+  msg_ok "VM $VMID laeuft."
 fi
 
 # GPU nachtraeglich sicherstellen (Update-Modus)
