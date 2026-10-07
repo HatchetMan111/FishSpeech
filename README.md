@@ -7,11 +7,31 @@
 
 ## Einzeiler (auf dem Proxmox-Host als root)
 
+> Pflicht: `--sshkey` (Debian-Cloud-Images lassen nur Key-Login zu).
+> Empfohlen: statische `--ip` (erspart DHCP-/Agent-Probleme).
+
+Schritt für Schritt (kopierfertig):
+
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh)"
+# 1. SSH-Key (einmalig, falls keiner vorhanden):
+[[ -f ~/.ssh/id_ed25519.pub ]] || ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''
+
+# 2. Freie IP prüfen (muss ins Leere laufen):
+ping -c2 192.168.178.50
+
+# 3. Installieren (das `_` nach dem schließenden `"` ist Absicht –
+#    ohne es kommen die Flags bei `bash -c` nicht an):
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh)" _ --sshkey ~/.ssh/id_ed25519.pub --ip 192.168.178.50/24 --gateway 192.168.178.1
 ```
 
-Anpassungen per Umgebungsvariable oder Flag (ID immer **nächste freie**, außer gesetzt):
+Alternative ohne `_`-Trick (Datei laden, dann normal mit Flags):
+
+```bash
+wget -qO fish-speech.sh https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh
+bash fish-speech.sh --sshkey ~/.ssh/id_ed25519.pub --ip 192.168.178.50/24 --gateway 192.168.178.1
+```
+
+Weitere Anpassungen (ID immer **nächste freie**, außer gesetzt):
 
 ```bash
 VMID=150 CORES=8 RAM=16384 DISK=60 bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/FishSpeech/main/install/fish-speech.sh)"
@@ -85,7 +105,7 @@ Modell manuell nachladen (falls best-effort-Download im Gast fehlschlug):
 ```bash
 ssh fish@<VM-IP>
 cd /opt/fish-speech
-.venv/bin/hf download fishaudio/s2-pro --local-dir checkpoints/s2-pro
+.venv/bin/python -m huggingface_hub.cli download fishaudio/s2-pro --local-dir checkpoints/s2-pro
 sudo systemctl restart fish-speech
 ```
 
